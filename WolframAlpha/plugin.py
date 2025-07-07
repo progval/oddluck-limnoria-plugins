@@ -191,7 +191,7 @@ class WolframAlpha(callbacks.Plugin):
             # each answer has a different amount of pods.
             for pod in document.findall(".//pod"):
                 title = pod.attrib["title"]  # title of it.
-                position = int(pod.attrib["position"])  # store pods int when we sort.
+                position = float(pod.attrib["position"])  # store pods int when we sort.
                 outputlist[position] = title  # pu
                 for plaintext in pod.findall(".//plaintext"):
                     if plaintext.text:
