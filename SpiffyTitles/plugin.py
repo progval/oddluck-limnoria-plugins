@@ -37,9 +37,13 @@ import supybot.log as log
 import supybot.conf as conf
 import re, sys, random, time, json, unicodedata, datetime
 from urllib.parse import urlparse, parse_qsl
-from bs4 import BeautifulSoup
 from jinja2 import Template
 import requests
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError as e:
+    raise ImportError("%s. Try installing beautifulsoup4." % (e.args[0])) from None
 
 try:
     from supybot.i18n import PluginInternationalization

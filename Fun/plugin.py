@@ -35,11 +35,15 @@ import supybot.callbacks as callbacks
 import supybot.ircmsgs as ircmsgs
 import random
 import requests
-from bs4 import BeautifulSoup
 import codecs
 import os
 import collections
 import json
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError as e:
+    raise ImportError("%s. Try installing beautifulsoup4." % (e.args[0])) from None
 
 try:
     from supybot.i18n import PluginInternationalization

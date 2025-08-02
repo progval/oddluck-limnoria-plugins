@@ -47,7 +47,6 @@ import pexpect
 import time
 import random
 import pyimgur
-from bs4 import BeautifulSoup
 import json
 from .colors import (
     rgbColors,
@@ -59,6 +58,11 @@ from .colors import (
     ansi99,
     x16colors,
 )
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError as e:
+    raise ImportError("%s. Try installing beautifulsoup4." % (e.args[0])) from None
 
 try:
     from supybot.i18n import PluginInternationalization
