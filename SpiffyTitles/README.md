@@ -1,4 +1,5 @@
-Spiffytitles is no longer supported... By me... Please feel free to fork!
+SpiffyTitles is now being maintained by [matiasw](https://github.com/matiasw)
+Official repository is at https://github.com/matiasw/my-limnoria-plugins/tree/master/SpiffyTitles
 
 Highly customizable and fully-featured link title snarfer with many URL handlers.
 
@@ -32,8 +33,8 @@ The ONLY gluten-free plugin for displaying link titles.
 Check out the [available options](#available-options)!
 
 ## Install SpiffyTitles
-- install pip if you don't have it already (eg. `apt install python3-pip`)
-- `pip3 install --user --upgrade git+https://github.com/oddluck/limnoria-plugins.git#subdirectory=SpiffyTitles`
+install pip if you don't have it already (eg. apt install python3-pip)
+pip3 install --user --upgrade git+https://github.com/matiasw/my-limnoria-plugins.git#subdirectory=SpiffyTitles
 
 You should `!unload Web` and any other plugins that show link titles for best results
 
