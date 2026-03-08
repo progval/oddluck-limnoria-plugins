@@ -151,7 +151,7 @@ class SpiffyTitles(callbacks.Plugin):
         """
         Observe each channel message and look for links
         """
-        channel = msg.args[0]
+        channel = msg.channel
         message = msg.args[1]
         title = None
         if not ircutils.isUserHostmask(msg.prefix):
@@ -161,7 +161,7 @@ class SpiffyTitles(callbacks.Plugin):
         if msg.nick.lower() == irc.nick.lower():
             return
         if callbacks.addressed(irc, msg) and self.registryValue(
-            "ignoreAddressed", channel=channel
+            "ignoreAddressed", channel=channel, network=irc.network,
         ):
             return
         if ircdb.checkIgnored(msg.prefix, channel):
@@ -169,18 +169,18 @@ class SpiffyTitles(callbacks.Plugin):
         """
         Check if we require a capability to acknowledge this link
         """
-        if self.registryValue("requireCapability", channel=channel):
-            if not self.user_has_capability(msg):
+        if self.registryValue("requireCapability", channel=channel, network=irc.network):
+            if not self.user_has_capability(msg, irc.network):
                 return
         """
         Configuration option determines whether we should
         ignore links that appear within an action
         """
-        if self.registryValue("ignoreActionLinks", channel=channel) and (
+        if self.registryValue("ignoreActionLinks", channel=channel, network=irc.network) and (
             ircmsgs.isCtcp(msg) or ircmsgs.isAction(msg)
         ):
             return
-        if self.message_matches_ignore_pattern(message, channel):
+        if self.message_matches_ignore_pattern(message, channel, network=irc.network):
             log.debug(
                 "SpiffyTitles: ignoring message due to ignoredMessagePattern match"
             )
@@ -192,10 +192,10 @@ class SpiffyTitles(callbacks.Plugin):
                 % (channel)
             )
             return
-        if self.registryValue("snarfMultipleUrls", channel=channel):
-            urls = self.get_urls_from_message(message, channel)
+        if self.registryValue("snarfMultipleUrls", channel=channel, network=irc.network):
+            urls = self.get_urls_from_message(message, channel, irc.network)
         else:
-            urls = self.get_urls_from_message(message, channel)[0:1]
+            urls = self.get_urls_from_message(message, channel, irc.network)[0:1]
         if not urls:
             return
         for url in urls:
@@ -204,16 +204,16 @@ class SpiffyTitles(callbacks.Plugin):
                 # Check if channel is allowed based on white/black list restrictions
                 info = urlparse(url)
                 domain = info.netloc
-                is_ignored = self.is_ignored_domain(domain, channel)
+                is_ignored = self.is_ignored_domain(domain, channel, irc.network)
                 if is_ignored:
                     log.debug(
                         "SpiffyTitles: URL ignored due to domain blacklist match: %s"
                         % url
                     )
                     return
-                is_whitelisted_domain = self.is_whitelisted_domain(domain, channel)
+                is_whitelisted_domain = self.is_whitelisted_domain(domain, channel, irc.network)
                 whitelist_pattern = self.registryValue(
-                    "whitelistDomainPattern", channel=channel
+                    "whitelistDomainPattern", channel=channel, network=irc.network
                 )
                 if whitelist_pattern and not is_whitelisted_domain:
                     log.debug(
@@ -221,16 +221,16 @@ class SpiffyTitles(callbacks.Plugin):
                         % url
                     )
                     return
-                title = self.get_title_by_url(url, channel, msg.nick)
+                title = self.get_title_by_url(url, channel, irc.network, msg.nick)
                 if title:
-                    prefixed = self.registryValue("prefixNick", channel=channel)
-                    ignore_match = self.title_matches_ignore_pattern(title, channel)
+                    prefixed = self.registryValue("prefixNick", channel=channel, network=irc.network)
+                    ignore_match = self.title_matches_ignore_pattern(title, channel, irc.network)
                     if ignore_match:
                         return
                     elif not is_ignored:
                         irc.reply(title, prefixNick=prefixed)
                 else:
-                    if self.registryValue("default.enabled", channel):
+                    if self.registryValue("default.enabled", channel, network=irc.network):
                         log.debug("SpiffyTitles: could not get a title for %s" % (url))
                     else:
                         log.debug(
@@ -239,16 +239,16 @@ class SpiffyTitles(callbacks.Plugin):
                             % (url)
                         )
 
-    def handler_default(self, url, channel):
+    def handler_default(self, url, channel, network):
         """
         Default handler for websites
         """
-        if self.registryValue("default.enabled", channel):
+        if self.registryValue("default.enabled", channel=channel, network=network):
             log.debug("SpiffyTitles: calling default handler for %s" % (url))
             default_template = Template(
-                self.registryValue("default.template", channel=channel)
+                self.registryValue("default.template", channel=channel, network=network)
             )
-            (title, is_redirect) = self.get_source_by_url(url, channel)
+            (title, is_redirect) = self.get_source_by_url(url, channel, network)
             if title:
                 title_template = default_template.render(
                     title=title, redirect=is_redirect
@@ -261,7 +261,7 @@ class SpiffyTitles(callbacks.Plugin):
                 "SpiffyTitles: default handler fired but doing nothing because disabled"
             )
 
-    def get_title_by_url(self, url, channel, origin_nick=None):
+    def get_title_by_url(self, url, channel, network, origin_nick=None):
         """
         Retrieves the title of a website based on the URL provided
         """
@@ -274,43 +274,44 @@ class SpiffyTitles(callbacks.Plugin):
         """
         if self.registryValue("cacheGlobal"):
             channel = "global"
-        cached_link = self.get_link_from_cache(url, channel)
+        cached_link = self.get_link_from_cache(url, channel, network)
         if cached_link:
             title = cached_link["title"]
         else:
             if domain in self.handlers:
                 handler = self.handlers[domain]
-                title = handler(url, info, channel)
+                title = handler(url, info, channel, network)
             else:
                 base_domain = self.get_base_domain("http://" + domain)
                 if base_domain in self.handlers:
                     handler = self.handlers[base_domain]
-                    title = handler(url, info, channel)
+                    title = handler(url, info, channel, network)
                 else:
-                    if self.registryValue("default.enabled", channel):
-                        title = self.handler_default(url, channel)
+                    if self.registryValue("default.enabled", channel=channel, network=network):
+                        title = self.handler_default(url, channel, network)
         if title and not cached_link:
-            title = self.get_formatted_title(title, channel)
+            title = self.get_formatted_title(title, channel, network)
             # Update link cache
             log.debug("SpiffyTitles: caching %s" % (url))
             now = datetime.datetime.now()
-            if channel not in self.link_cache:
-                self.link_cache[channel] = []
-            self.link_cache[channel].append(
+            if (channel, network) not in self.link_cache:
+                self.link_cache[channel, network] = []
+            self.link_cache[channel, network].append(
                 {
                     "url": url,
                     "timestamp": now,
                     "title": title,
                     "from": origin_nick,
                     "channel": channel,
+                    "network": network,
                 }
             )
         elif title and cached_link:
-            self.link_cache[channel].append(cached_link)
+            self.link_cache[channel, network].append(cached_link)
             log.debug("SpiffyTitles: serving link from cache: %s" % (url))
         return title
 
-    def get_link_from_cache(self, url, channel):
+    def get_link_from_cache(self, url, channel, network):
         """
         Looks for a URL in the link cache and returns info about if it's not stale
         according to the configured cache lifetime, or None. If cacheLifetime is 0,
@@ -326,10 +327,10 @@ class SpiffyTitles(callbacks.Plugin):
         now = datetime.datetime.now()
         stale = False
         seconds = 0
-        if channel in self.link_cache:
-            for i in range(len(self.link_cache[channel])):
-                if self.link_cache[channel][i]["url"] == url:
-                    cached_link = self.link_cache[channel].pop(i)
+        if (channel, network) in self.link_cache:
+            for i in range(len(self.link_cache[channel, network])):
+                if self.link_cache[channel, network][i]["url"] == url:
+                    cached_link = self.link_cache[channel, network].pop(i)
                     break
         # Found link, check timestamp
         if cached_link:
@@ -369,11 +370,11 @@ class SpiffyTitles(callbacks.Plugin):
         """
         return set([channel for channel in input if len(channel.strip())])
 
-    def is_ignored_domain(self, domain, channel):
+    def is_ignored_domain(self, domain, channel, network):
         """
         Checks domain against a regular expression
         """
-        pattern = self.registryValue("ignoredDomainPattern", channel=channel)
+        pattern = self.registryValue("ignoredDomainPattern", channel=channel, network=network)
         if pattern:
             log.debug("SpiffyTitles: matching %s against %s" % (domain, str(pattern)))
             try:
@@ -384,11 +385,11 @@ class SpiffyTitles(callbacks.Plugin):
             except re.error:
                 log.error("SpiffyTitles: invalid regular expression: %s" % (pattern))
 
-    def is_whitelisted_domain(self, domain, channel):
+    def is_whitelisted_domain(self, domain, channel, network):
         """
         Checks domain against a regular expression
         """
-        pattern = self.registryValue("whitelistDomainPattern", channel=channel)
+        pattern = self.registryValue("whitelistDomainPattern", channel=channel, network=network)
         if pattern:
             log.debug("SpiffyTitles: matching %s against %s" % (domain, str(pattern)))
             try:
@@ -399,18 +400,18 @@ class SpiffyTitles(callbacks.Plugin):
             except re.error:
                 log.error("SpiffyTitles: invalid regular expression: %s" % (pattern))
 
-    def get_formatted_title(self, title, channel):
+    def get_formatted_title(self, title, channel, network):
         """
         Remove cruft from title and apply bold if applicable
         """
-        use_bold = self.registryValue("useBold", channel=channel)
+        use_bold = self.registryValue("useBold", channel=channel, network=network)
         # Replace anywhere in string
         title = re.sub(r"\s+", " ", title)
         if use_bold:
             title = ircutils.bold(title).strip()
         return title
 
-    def get_title_from_html(self, html, channel):
+    def get_title_from_html(self, html, channel, network):
         """
         Retrieves value of <title> tag from HTML
         """
@@ -420,10 +421,10 @@ class SpiffyTitles(callbacks.Plugin):
             try:
                 title = soup.title.string.strip()
             except:
-                title = self.registryValue("badLinkText", channel=channel)
+                title = self.registryValue("badLinkText", channel=channel, network=network)
         return title
 
-    def get_source_by_url(self, url, channel, retries=1):
+    def get_source_by_url(self, url, channel, network, retries=1):
         """
         Get the HTML of a website based on a URL
         """
@@ -434,7 +435,7 @@ class SpiffyTitles(callbacks.Plugin):
         log.debug("SpiffyTitles: attempt #%s for %s" % (retries, url))
         is_redirect = False
         try:
-            headers = self.get_headers(channel)
+            headers = self.get_headers(channel, network)
             log.debug("SpiffyTitles: requesting %s" % (url))
             with requests.get(
                 url,
@@ -459,7 +460,7 @@ class SpiffyTitles(callbacks.Plugin):
                         log.debug("SpiffyTitles: Final url %s" % (request.url))
                         info = urlparse(request.url)
                         domain = info.netloc
-                        is_ignored = self.is_ignored_domain(domain, channel)
+                        is_ignored = self.is_ignored_domain(domain, channel, network)
                         if is_ignored:
                             log.debug(
                                 "SpiffyTitles: URL ignored due to domain blacklist"
@@ -468,10 +469,10 @@ class SpiffyTitles(callbacks.Plugin):
                             )
                             return
                         whitelist_pattern = self.registryValue(
-                            "whitelistDomainPattern", channel=channel
+                            "whitelistDomainPattern", channel=channel, network=network
                         )
                         is_whitelisted_domain = self.is_whitelisted_domain(
-                            domain, channel
+                            domain, channel, network
                         )
                         if whitelist_pattern and not is_whitelisted_domain:
                             log.debug(
@@ -480,7 +481,7 @@ class SpiffyTitles(callbacks.Plugin):
                                 % url
                             )
                             return
-                        text = self.get_title_by_url(request.url, channel)
+                        text = self.get_title_by_url(request.url, channel, network)
                         text = text.lstrip("\x02").lstrip("^").strip()
                         return (text, is_redirect)
                 # Check the content type
@@ -490,7 +491,7 @@ class SpiffyTitles(callbacks.Plugin):
                 if content_type in acceptable_types:
                     text = request.content
                     if text:
-                        return (self.get_title_from_html(text, channel), is_redirect)
+                        return (self.get_title_from_html(text, channel, network), is_redirect)
                     else:
                         log.debug("SpiffyTitles: empty content from %s" % (url))
                 else:
@@ -502,7 +503,7 @@ class SpiffyTitles(callbacks.Plugin):
                     if size:
                         size = self.get_readable_file_size(int(size))
                     file_template = self.registryValue(
-                        "default.fileTemplate", channel=channel
+                        "default.fileTemplate", channel=channel, network=network
                     )
                     text = Template(file_template).render(
                         {"type": content_type, "size": size}
@@ -512,23 +513,23 @@ class SpiffyTitles(callbacks.Plugin):
             url_wschema = "http://%s" % (url)
             log.error("SpiffyTitles missing schema. Retrying with %s" % (url_wschema))
             info = urlparse(url_wschema)
-            if self.is_ignored_domain(info.netloc, channel):
+            if self.is_ignored_domain(info.netloc, channel, network):
                 return
             else:
-                return self.get_source_by_url(url_wschema, channel)
+                return self.get_source_by_url(url_wschema, channel, network)
         except requests.exceptions.Timeout as e:
             log.error("SpiffyTitles Timeout: %s" % (str(e)))
-            self.get_source_by_url(url, channel, retries + 1)
+            self.get_source_by_url(url, channel, network, retries + 1)
         except requests.exceptions.ConnectionError as e:
             log.error("SpiffyTitles ConnectionError: %s" % (str(e)))
-            self.get_source_by_url(url, channel, retries + 1)
+            self.get_source_by_url(url, channel, network, retries + 1)
         except requests.exceptions.HTTPError as e:
             log.error("SpiffyTitles HTTPError: %s" % (str(e)))
-            text = self.registryValue("badLinkText", channel=channel)
+            text = self.registryValue("badLinkText", channel=channel, network=network)
             return (text, is_redirect)
         except requests.exceptions.InvalidURL as e:
             log.error("SpiffyTitles InvalidURL: %s" % (str(e)))
-            text = self.registryValue("badLinkText", channel=channel)
+            text = self.registryValue("badLinkText", channel=channel, network=network)
             return (text, is_redirect)
         return (None, False)
 
@@ -538,9 +539,9 @@ class SpiffyTitles(callbacks.Plugin):
         """
         return ".".join(urlparse(url).netloc.rsplit(".", 2)[-2:])
 
-    def get_headers(self, channel):
+    def get_headers(self, channel, network):
         agent = self.get_user_agent()
-        language = self.registryValue("default.language", channel)
+        language = self.registryValue("default.language", channel, network)
         headers = {
             "User-Agent": agent,
             "Accept-Language": "{0}".format(language),
@@ -554,7 +555,7 @@ class SpiffyTitles(callbacks.Plugin):
         agents = self.registryValue("default.userAgents")
         return random.choice(agents)
 
-    def message_matches_ignore_pattern(self, input, channel):
+    def message_matches_ignore_pattern(self, input, channel, network=None):
         """
         Checks message against ignoredMessagePattern to determine
         whether the message should be ignored.
@@ -565,13 +566,13 @@ class SpiffyTitles(callbacks.Plugin):
             match = re.search(pattern, input)
         return match
 
-    def title_matches_ignore_pattern(self, input, channel):
+    def title_matches_ignore_pattern(self, input, channel, network):
         """
         Checks message against ignoredTitlePattern to determine
         whether the title should be ignored.
         """
         match = False
-        pattern = self.registryValue("ignoredTitlePattern", channel=channel)
+        pattern = self.registryValue("ignoredTitlePattern", channel=channel, network=network)
         if pattern:
             match = re.search(pattern, input)
             if match:
@@ -581,11 +582,11 @@ class SpiffyTitles(callbacks.Plugin):
                 )
         return match
 
-    def get_urls_from_message(self, input, channel):
+    def get_urls_from_message(self, input, channel, network):
         """
         Find the first string that looks like a URL from the message
         """
-        url_re = self.registryValue("urlRegexp", channel)
+        url_re = self.registryValue("urlRegexp", channel, network)
         if not url_re:
             url_re = utils.web._httpUrlRe
         matches = re.findall(url_re, input)
@@ -594,11 +595,10 @@ class SpiffyTitles(callbacks.Plugin):
     def remove_control_characters(self, s):
         return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
 
-    def user_has_capability(self, msg):
-        channel = msg.args[0]
+    def user_has_capability(self, msg, network):
         mask = msg.prefix
-        required_capability = self.registryValue("requireCapability", channel=channel)
-        cap = ircdb.makeChannelCapability(channel, required_capability)
+        required_capability = self.registryValue("requireCapability", channel=msg.channel, network=network)
+        cap = ircdb.makeChannelCapability(msg.channel, required_capability)
         has_cap = ircdb.checkCapability(mask, cap, ignoreDefaultAllow=True)
         if has_cap:
             log.debug(
@@ -622,22 +622,22 @@ class SpiffyTitles(callbacks.Plugin):
             num /= 1024.0
         return "%.1f%s%s" % (num, "Yi", suffix)
 
-    def get_template(self, handler_template, channel):
+    def get_template(self, handler_template, channel, network):
         """
         Returns the requested template object.
         """
-        template = Template(self.registryValue(handler_template, channel=channel))
+        template = Template(self.registryValue(handler_template, channel=channel, network=network))
         return template
 
-    def handler_dailymotion(self, url, info, channel):
+    def handler_dailymotion(self, url, info, channel, network):
         """
         Handles dailymotion links
         """
         dailymotion_handler_enabled = self.registryValue(
-            "dailymotion.enabled", channel=channel
+            "dailymotion.enabled", channel=channel, network=network
         )
         if not dailymotion_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         log.debug("SpiffyTitles: calling dailymotion handler for %s" % url)
         title = None
         video_id = None
@@ -650,7 +650,7 @@ class SpiffyTitles(callbacks.Plugin):
             log.error(
                 "SpiffyTitles: unable to get dailymotion video_id for URL: %s" % url
             )
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         fields = "id,title,owner.screenname,duration,views_total"
         api_url = "https://api.dailymotion.com/video/%s?fields=%s" % (video_id, fields,)
         log.debug("SpiffyTitles: looking up dailymotion info: %s", api_url)
@@ -662,12 +662,12 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: dailymotion error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         response = json.loads(request.content.decode())
         if response and "title" in response:
             video = response
             dailymotion_template = Template(
-                self.registryValue("dailymotion.template", channel=channel)
+                self.registryValue("dailymotion.template", channel=channel, network=network)
             )
             video["views_total"] = "{:,}".format(int(video["views_total"]))
             video["duration"] = self.get_duration_from_seconds(video["duration"])
@@ -679,17 +679,17 @@ class SpiffyTitles(callbacks.Plugin):
             )
         if not title:
             log.debug("SpiffyTitles: could not get dailymotion info for %s" % url)
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         else:
             return title
 
-    def handler_vimeo(self, url, domain, channel):
+    def handler_vimeo(self, url, domain, channel, network):
         """
         Handles Vimeo links
         """
-        vimeo_handler_enabled = self.registryValue("vimeo.enabled", channel=channel)
+        vimeo_handler_enabled = self.registryValue("vimeo.enabled", channel=channel, network=network)
         if not vimeo_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         log.debug("SpiffyTitles: calling vimeo handler for %s" % url)
         title = None
         video_id = None
@@ -699,7 +699,7 @@ class SpiffyTitles(callbacks.Plugin):
             video_id = result.group(5)
         if not video_id:
             log.error("SpiffyTitles: Failef to get Vimeo video ID from URL: %s" % url)
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         api_url = "https://vimeo.com/api/v2/video/%s.json" % video_id
         log.debug("SpiffyTitles: looking up vimeo info: %s", api_url)
         try:
@@ -710,12 +710,12 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: vimeo error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         response = json.loads(request.content.decode())
         if response and "title" in response[0]:
             video = response[0]
             vimeo_template = Template(
-                self.registryValue("vimeo.template", channel=channel)
+                self.registryValue("vimeo.template", channel=channel, network=network)
             )
             """
             Some videos do not have this information available
@@ -738,17 +738,17 @@ class SpiffyTitles(callbacks.Plugin):
             )
         if not title:
             log.debug("SpiffyTitles: could not get vimeo info for %s" % url)
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         else:
             return title
 
-    def handler_coub(self, url, domain, channel):
+    def handler_coub(self, url, domain, channel, network):
         """
         Handles coub.com links
         """
-        coub_handler_enabled = self.registryValue("coub.enabled", channel=channel)
+        coub_handler_enabled = self.registryValue("coub.enabled", channel=channel, network=network)
         if not coub_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         log.debug("SpiffyTitles: calling coub handler for %s" % url)
         title = None
         video_id = None
@@ -760,7 +760,7 @@ class SpiffyTitles(callbacks.Plugin):
                 video_id = video_id.split("?")[0]
         if not video_id:
             log.error("SpiffyTitles: Failed to get Coub video ID for URL: %s" % url)
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         api_url = "http://coub.com/api/v2/coubs/%s" % video_id
         try:
             request = requests.get(api_url, timeout=self.timeout, proxies=self.proxies)
@@ -770,7 +770,7 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: coub error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         response = json.loads(request.content.decode())
         if response:
             video = response
@@ -781,7 +781,7 @@ class SpiffyTitles(callbacks.Plugin):
             title = coub_template.render(video)
         if not title:
             log.debug("SpiffyTitles: Coub handler failed to get data for URL: %s" % url)
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         else:
             return title
 
@@ -809,14 +809,14 @@ class SpiffyTitles(callbacks.Plugin):
                 "SpiffyTitles: error getting video id from %s (%s)" % (url, str(e))
             )
 
-    def handler_youtube(self, url, domain, channel):
+    def handler_youtube(self, url, domain, channel, network):
         """
         Uses the Youtube API to provide additional meta data about
         Youtube Video links posted.
         """
-        youtube_handler_enabled = self.registryValue("youtube.enabled", channel)
+        youtube_handler_enabled = self.registryValue("youtube.enabled", channel, network)
         if not youtube_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         developer_key = self.registryValue("youtube.developerKey")
         if not developer_key:
             log.info(
@@ -830,8 +830,8 @@ class SpiffyTitles(callbacks.Plugin):
             log.debug(
                 "SpiffyTitles: Failed to get YouTube video ID for URL: {0}".format(url)
             )
-            return self.handler_default(url, channel)
-        yt_template = Template(self.registryValue("youtube.template", channel))
+            return self.handler_default(url, channel, network)
+        yt_template = Template(self.registryValue("youtube.template", channel, network))
         title = ""
         options = {
             "part": "snippet,statistics,contentDetails",
@@ -851,11 +851,11 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitiles: YouTube Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         response = json.loads(request.content.decode())
         if not response or not response.get("items"):
             log.error("SpiffyTitles: Failed to parse YouTube JSON response")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         try:
             items = response["items"]
             video = items[0]
@@ -892,7 +892,7 @@ class SpiffyTitles(callbacks.Plugin):
                 restricted = True
             published = snippet["publishedAt"].split("T")[0]
             timestamp = self.get_timestamp_from_youtube_url(url)
-            yt_logo = self.get_youtube_logo(channel)
+            yt_logo = self.get_youtube_logo(channel, network)
             compiled_template = yt_template.render(
                 {
                     "title": title,
@@ -919,7 +919,7 @@ class SpiffyTitles(callbacks.Plugin):
             return title
         else:
             log.debug("SpiffyTitles: falling back to default handler")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
     def get_duration_from_seconds(self, duration_seconds):
         m, s = divmod(duration_seconds, 60)
@@ -930,12 +930,12 @@ class SpiffyTitles(callbacks.Plugin):
             duration = "%02d:%s" % (h, duration)
         return duration
 
-    def get_youtube_logo(self, channel):
-        use_bold = self.registryValue("useBold", channel)
+    def get_youtube_logo(self, channel, network):
+        use_bold = self.registryValue("useBold", channel, network)
         if use_bold:
-            yt_logo = "{0}\x0F\x02".format(self.registryValue("youtube.logo", channel))
+            yt_logo = "{0}\x0F\x02".format(self.registryValue("youtube.logo", channel, network))
         else:
-            yt_logo = "{0}\x0F".format(self.registryValue("youtube.logo", channel))
+            yt_logo = "{0}\x0F".format(self.registryValue("youtube.logo", channel, network))
         return yt_logo
 
     def get_total_seconds_from_duration(self, input):
@@ -983,22 +983,22 @@ class SpiffyTitles(callbacks.Plugin):
         else:
             return ""
 
-    def handler_twitch(self, url, domain, channel):
+    def handler_twitch(self, url, domain, channel, network):
         """
         Queries twitch API for additional information about twitch links.
         This handler is for (www.)twitch.tv
         """
-        twitch_handler_enabled = self.registryValue("twitch.enabled", channel=channel)
+        twitch_handler_enabled = self.registryValue("twitch.enabled", channel=channel, network=network)
         if not twitch_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         twitch_client_id = self.registryValue("twitch.clientID")
         if not twitch_client_id:
             log.error("SpiffyTitles: Please set your Twitch client ID")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         access_token = self.registryValue("twitch.accessToken")
         if not access_token:
             log.error("SpiffyTitles: Please set your Twitch Access Token")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         url = url.split("?")[0]
         self.log.debug("SpiffyTitles: calling twitch handler for %s" % (url))
         patterns = {
@@ -1027,7 +1027,7 @@ class SpiffyTitles(callbacks.Plugin):
                 break
         if not match:
             self.log.debug("SpiffyTitles: twitch - no title found.")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         bearer = "Bearer {}".format(access_token.strip())
         headers = {"Client-ID": twitch_client_id, "Authorization": bearer}
         self.log.debug("SpiffyTitles: twitch - requesting %s" % (data_url))
@@ -1041,7 +1041,7 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffytTitles: Twitch Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         data = {}
         try:
             response = json.loads(request.content.decode())
@@ -1049,11 +1049,11 @@ class SpiffyTitles(callbacks.Plugin):
             response = None
         if not response:
             log.error("SpiffyTitles: Error parsing Twitch.TV JSON response")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         self.log.debug("SpiffyTitles: twitch - got response:\n%s" % (response))
         if "error" in response:
             log.error("SpiffyTitles: Twitch Error: {0}".format(response["error"]))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         if link_type == "channel":
             self.log.debug("SpiffyTitles: Twitch: link_type is channel")
             if "data" in response and response["data"]:
@@ -1078,7 +1078,7 @@ class SpiffyTitles(callbacks.Plugin):
                 requests.exceptions.HTTPError,
             ) as e:
                 log.error("SpiffyTitles: Twitch Error: {0}".format(e))
-                return self.handler_default(url, channel)
+                return self.handler_default(url, channel, network)
             user_data = {}
             try:
                 response = json.loads(request.content.decode())
@@ -1097,16 +1097,16 @@ class SpiffyTitles(callbacks.Plugin):
             data = response
         if not data and not user_data:
             log.error("SpiffyTitles: Twitch: Failed to get data from Twitch API")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         log.debug("SpiffyTitles: twitch - Got data '%s'" % (data))
         twitch_template = self.get_template(
-            "".join(["twitch.", link_type, "Template"]), channel
+            "".join(["twitch.", link_type, "Template"]), channel, network
         )
-        twitch_logo = self.get_twitch_logo(channel)
+        twitch_logo = self.get_twitch_logo(channel, network)
         if not twitch_template:
             self.log.debug("SpiffyTitles - twitch: bad template for %s" % (link_type))
             log.error("SpiffyTitles: Twitch: Got data, but template was bad")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         if link_type == "stream":
             display_name = data["user_name"]
             game_id = data["game_id"]
@@ -1150,7 +1150,7 @@ class SpiffyTitles(callbacks.Plugin):
                 requests.exceptions.HTTPError,
             ) as e:
                 log.error("SpiffyTitles: Twitch Error: {0}".format(e))
-                return self.handler_default(url, channel)
+                return self.handler_default(url, channel, network)
             user_data = {}
             try:
                 response = json.loads(request.content.decode())
@@ -1200,7 +1200,7 @@ class SpiffyTitles(callbacks.Plugin):
                 requests.exceptions.HTTPError,
             ) as e:
                 log.error("SpiffyTitles: Twitch Error: {0}".format(e))
-                return self.handler_default(url, channel)
+                return self.handler_default(url, channel, network)
             user_data = {}
             try:
                 response = json.loads(request.content.decode())
@@ -1264,26 +1264,26 @@ class SpiffyTitles(callbacks.Plugin):
             rel_time = "%ss ago" % (abs(d.seconds))
         return rel_time
 
-    def get_twitch_logo(self, channel):
-        use_bold = self.registryValue("useBold", channel)
+    def get_twitch_logo(self, channel, network):
+        use_bold = self.registryValue("useBold", channel, network)
         if use_bold:
             twitch_logo = "{0}\x0F\x02".format(
-                self.registryValue("twitch.logo", channel)
+                self.registryValue("twitch.logo", channel, network)
             )
         else:
-            twitch_logo = "{0}\x0F".format(self.registryValue("twitch.logo", channel))
+            twitch_logo = "{0}\x0F".format(self.registryValue("twitch.logo", channel, network))
         return twitch_logo
 
-    def handler_imdb(self, url, info, channel):
+    def handler_imdb(self, url, info, channel, network):
         """
         Handles imdb.com links, querying the OMDB API for additional info
         Typical IMDB URL: http://www.imdb.com/title/tt2467372/
         """
-        if not self.registryValue("imdb.enabled", channel=channel):
+        if not self.registryValue("imdb.enabled", channel=channel, network=network):
             log.debug(
                 "SpiffyTitles: IMDB handler disabled. Falling back to default handler."
             )
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         apikey = self.registryValue("imdb.omdbAPI")
         result = None
         response = None
@@ -1297,7 +1297,7 @@ class SpiffyTitles(callbacks.Plugin):
             imdb_id = match.group(1)
         if not imdb_id:
             log.error("SpiffyTitles: Invalid IMDB URL: %s" % url)
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         omdb_url = "http://www.omdbapi.com/"
         options = {"apikey": apikey, "i": imdb_id, "r": "json", "plot": "short"}
         try:
@@ -1353,44 +1353,44 @@ class SpiffyTitles(callbacks.Plugin):
                 "box_office": response.get("BoxOffice"),
                 "production": response.get("Production"),
                 "poster": response.get("Poster"),
-                "imdb_logo": self.get_imdb_logo(channel),
+                "imdb_logo": self.get_imdb_logo(channel, network),
             }
             result = imdb_template.render(template_vars)
         if result:
             return result
         else:
             log.debug("SpiffyTitles: IMDB handler failed. calling default handler")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
-    def get_imdb_logo(self, channel):
-        use_bold = self.registryValue("useBold", channel)
+    def get_imdb_logo(self, channel, network):
+        use_bold = self.registryValue("useBold", channel, network)
         if use_bold:
-            imdb_logo = "{0}\x0F\x02".format(self.registryValue("imdb.logo", channel))
+            imdb_logo = "{0}\x0F\x02".format(self.registryValue("imdb.logo", channel, network))
         else:
-            imdb_logo = "{0}\x0F".format(self.registryValue("imdb.logo", channel))
+            imdb_logo = "{0}\x0F".format(self.registryValue("imdb.logo", channel, network))
         return imdb_logo
 
-    def handler_wikipedia(self, url, domain, channel):
+    def handler_wikipedia(self, url, domain, channel, network):
         """
         Queries wikipedia API for article extracts.
         """
         wikipedia_handler_enabled = self.registryValue(
-            "wikipedia.enabled", channel=channel
+            "wikipedia.enabled", channel=channel, network=network
         )
         if not wikipedia_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         self.log.debug("SpiffyTitles: calling Wikipedia handler for %s" % (url))
         pattern = r"/(?:w(?:iki))/(?P<page>[^/]+)$"
         info = urlparse(url)
         match = re.search(pattern, info.path)
         if not match:
             self.log.debug("SpiffyTitles: no title found.")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         elif info.fragment and self.registryValue(
-            "wikipedia.ignoreSectionLinks", channel=channel
+            "wikipedia.ignoreSectionLinks", channel=channel, network=network
         ):
             self.log.debug("SpiffyTitles: ignoring section link.")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         else:
             page_title = match.groupdict()["page"]
         default_api_params = {
@@ -1402,10 +1402,10 @@ class SpiffyTitles(callbacks.Plugin):
             "exintro": "",
             "explaintext": "",
         }
-        wiki_api_params = self.registryValue("wikipedia.apiParams", channel=channel)
+        wiki_api_params = self.registryValue("wikipedia.apiParams", channel=channel, network=network)
         extra_params = dict(parse_qsl("&".join(wiki_api_params)))
         title_param = {
-            self.registryValue("wikipedia.titleParam", channel=channel): page_title
+            self.registryValue("wikipedia.titleParam", channel=channel, network=network): page_title
         }
         # merge dicts
         api_params = default_api_params.copy()
@@ -1424,7 +1424,7 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: Wikipedia Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         response = json.loads(request.content.decode())
         if response:
             try:
@@ -1438,27 +1438,27 @@ class SpiffyTitles(callbacks.Plugin):
         if extract:
             if self.registryValue("wikipedia.removeParentheses"):
                 extract = re.sub(r" ?\([^)]*\)", "", extract)
-            max_chars = self.registryValue("wikipedia.maxChars", channel=channel)
+            max_chars = self.registryValue("wikipedia.maxChars", channel=channel, network=network)
             if len(extract) > max_chars:
                 extract = (
                     extract[: max_chars - 3].rsplit(" ", 1)[0].rstrip(",.") + "..."
                 )
             extract_template = self.registryValue(
-                "wikipedia.extractTemplate", channel=channel
+                "wikipedia.extractTemplate", channel=channel, network=network
             )
             wikipedia_template = Template(extract_template)
             return wikipedia_template.render({"extract": extract})
         else:
             self.log.debug("SpiffyTitles: falling back to default handler")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
-    def handler_reddit(self, url, domain, channel):
+    def handler_reddit(self, url, domain, channel, network):
         """
         Queries wikipedia API for article extracts.
         """
-        reddit_handler_enabled = self.registryValue("reddit.enabled", channel=channel)
+        reddit_handler_enabled = self.registryValue("reddit.enabled", channel=channel, network=network)
         if not reddit_handler_enabled:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         self.log.debug("SpiffyTitles: calling reddit handler for %s" % (url))
         patterns = {
             "thread": {
@@ -1489,7 +1489,7 @@ class SpiffyTitles(callbacks.Plugin):
                 break
         if not match:
             self.log.debug("SpiffyTitles: no title found.")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         self.log.debug("SpiffyTitles: requesting %s" % (data_url))
         headers = {"User-Agent": self.get_user_agent()}
         try:
@@ -1502,7 +1502,7 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: Reddit Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         data = {}
         extract = ""
         response = json.loads(request.content.decode())
@@ -1543,7 +1543,7 @@ class SpiffyTitles(callbacks.Plugin):
             if link_type == "comment":
                 extract = data.get("body", "")
             link_type_template = self.registryValue(
-                "reddit." + link_type + "Template", channel=channel
+                "reddit." + link_type + "Template", channel=channel, network=network
             )
             reddit_template = Template(link_type_template)
             template_vars = {
@@ -1567,7 +1567,7 @@ class SpiffyTitles(callbacks.Plugin):
             }
             reply = reddit_template.render(template_vars)
             if extract:
-                max_chars = self.registryValue("reddit.maxChars", channel=channel)
+                max_chars = self.registryValue("reddit.maxChars", channel=channel, network=network)
                 max_extract_chars = max_chars + len("%%extract%%") - len(reply)
                 if len(extract) > max_extract_chars:
                     extract = (
@@ -1579,7 +1579,7 @@ class SpiffyTitles(callbacks.Plugin):
             return reply
         else:
             self.log.debug("SpiffyTitles: falling back to default handler")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
     def is_valid_imgur_id(self, input):
         """
@@ -1592,7 +1592,7 @@ class SpiffyTitles(callbacks.Plugin):
         else:
             return
 
-    def handler_imgur(self, url, info, channel):
+    def handler_imgur(self, url, info, channel, network):
         """
         Queries imgur API for additional information about imgur links.
         This handler is for any imgur.com domain.
@@ -1600,23 +1600,23 @@ class SpiffyTitles(callbacks.Plugin):
         is_album = info.path.startswith("/a/") or info.path.startswith("/gallery/")
         result = None
         if is_album:
-            result = self.handler_imgur_album(url, info, channel)
+            result = self.handler_imgur_album(url, info, channel, network)
         else:
-            result = self.handler_imgur_image(url, info, channel)
+            result = self.handler_imgur_image(url, info, channel, network)
         return result
 
-    def handler_imgur_album(self, url, info, channel):
+    def handler_imgur_album(self, url, info, channel, network):
         """
         Handles retrieving information about albums from the imgur API.
         imgur provides the following information about albums:
         https://api.imgur.com/models/album
         """
-        if not self.registryValue("imgur.enabled", channel=channel):
-            return self.handler_default(url, channel)
+        if not self.registryValue("imgur.enabled", channel=channel, network=network):
+            return self.handler_default(url, channel, network)
         client_id = self.registryValue("imgur.clientID")
         if not client_id:
             log.error("SpiffyTitles: imgur client ID not set")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         if info.path.startswith("/a/"):
             album_id = info.path.split("/a/")[1]
         elif info.path.startswith("/gallery/"):
@@ -1626,7 +1626,7 @@ class SpiffyTitles(callbacks.Plugin):
             album_id = album_id.split("?")[0]
         if not self.is_valid_imgur_id(album_id):
             log.error("SpiffyTitles: Invalid imgur ID")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         log.debug("SpiffyTitles: found imgur album id %s" % (album_id))
         headers = {"Authorization": "Client-ID {0}".format(client_id)}
         api_url = "https://api.imgur.com/3/album/{0}".format(album_id)
@@ -1640,12 +1640,12 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: Imgur Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         album = None
         album = json.loads(request.content.decode())
         album = album.get("data")
         if album:
-            album_template = self.registryValue("imgur.albumTemplate", channel=channel)
+            album_template = self.registryValue("imgur.albumTemplate", channel=channel, network=network)
             imgur_album_template = Template(album_template)
             compiled_template = imgur_album_template.render(
                 {
@@ -1660,20 +1660,20 @@ class SpiffyTitles(callbacks.Plugin):
             return compiled_template
         else:
             log.error("SpiffyTitles: imgur album API returned unexpected results!")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
-    def handler_imgur_image(self, url, info, channel):
+    def handler_imgur_image(self, url, info, channel, network):
         """
         Handles retrieving information about images from the imgur API.
         Used for both direct images and imgur.com/some_image_id_here type links, as
         they're both single images.
         """
-        if not self.registryValue("imgur.enabled", channel=channel):
-            return self.handler_default(url, channel)
+        if not self.registryValue("imgur.enabled", channel=channel, network=network):
+            return self.handler_default(url, channel, network)
         client_id = self.registryValue("imgur.clientID")
         if not client_id:
             log.error("SpiffyTitles: imgur client ID not set")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         title = None
         """
         If there is a period in the path, it's a direct link to an image.
@@ -1686,7 +1686,7 @@ class SpiffyTitles(callbacks.Plugin):
             image_id = info.path.lstrip("/")
         if not self.is_valid_imgur_id(image_id):
             log.error("SpiffyTitles: Invalid imgur image ID")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         log.debug("SpiffyTitles: found image id %s" % (image_id))
         headers = {"Authorization": "Client-ID {0}".format(client_id)}
         api_url = "https://api.imgur.com/3/image/{0}".format(image_id)
@@ -1700,7 +1700,7 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: Imgur Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         image = None
         try:
             image = json.loads(request.content.decode())
@@ -1710,7 +1710,7 @@ class SpiffyTitles(callbacks.Plugin):
             image = None
         if image:
             channel_template = self.registryValue(
-                "imgur.imageTemplate", channel=channel
+                "imgur.imageTemplate", channel=channel, network=network
             )
             imgur_template = Template(channel_template)
             readable_file_size = self.get_readable_file_size(image["size"])
@@ -1732,11 +1732,11 @@ class SpiffyTitles(callbacks.Plugin):
         if title:
             return title
         else:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
-    def handler_twitter(self, url, info, channel):
-        if not self.registryValue("twitter.enabled", channel):
-            return self.handler_default(url, channel)
+    def handler_twitter(self, url, info, channel, network):
+        if not self.registryValue("twitter.enabled", channel, network):
+            return self.handler_default(url, channel, network)
         api_url = "https://publish.twitter.com/oembed?url={0}&omit_script=True".format(
             url
         )
@@ -1748,13 +1748,13 @@ class SpiffyTitles(callbacks.Plugin):
             requests.exceptions.HTTPError,
         ) as e:
             log.error("SpiffyTitles: Twitter Error: {0}".format(e))
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         response = None
         try:
             response = json.loads(request.content.decode())
         except:
             log.error("SpiffyTitles: Error reading Twitter JSON response")
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
         results = {}
         soup = BeautifulSoup(response["html"])
         results["text"] = soup.get_text(" ").strip()
@@ -1764,21 +1764,21 @@ class SpiffyTitles(callbacks.Plugin):
             results["name"] = match.group(2)
             results["nick"] = match.group(3)
             results["date"] = match.group(4)
-        template = Template(self.registryValue("twitter.template", channel))
+        template = Template(self.registryValue("twitter.template", channel, network))
         title = template.render(results).strip()
         if title:
             return title
         else:
-            return self.handler_default(url, channel)
+            return self.handler_default(url, channel, network)
 
     def t(self, irc, msg, args, query):
         """
         Retrieves title for a URL on demand
         """
-        channel = msg.args[0]
+        channel = msg.channel
         title = None
         try:
-            title = self.get_title_by_url(query, channel)
+            title = self.get_title_by_url(query, channel, irc.network)
         except:
             pass
         if title:
