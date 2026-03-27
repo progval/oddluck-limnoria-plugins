@@ -138,7 +138,7 @@ class DuckHunt(callbacks.Plugin):
             else:
                 # It's a player that already has a saved score
                 # And we save the time of the current hunt if it's worst than it's previous time
-                if self.worsttimes[channel][player] > value:
+                if self.channelworsttimes[channel][player] < value:
                     self.channelworsttimes[channel][player] = value
 
         # # week scores
