@@ -33,7 +33,8 @@ from supybot.commands import *
 from supybot.i18n import PluginInternationalization
 import supybot.log as log
 import re
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 _ = PluginInternationalization("Gemini")
 
@@ -47,6 +48,12 @@ class Gemini(callbacks.Plugin):
         self.__parent = super(Gemini, self)
         self.__parent.__init__(irc)
         self.history = {}
+        self.clients = {}
+
+    def _get_client(self, api_key):
+        if api_key not in self.clients:
+            self.clients[api_key] = genai.Client(api_key=api_key)
+        return self.clients[api_key]
 
     def chat(self, irc, msg, args, text):
         """Chat Call to the Gemini API"""
@@ -55,24 +62,22 @@ class Gemini(callbacks.Plugin):
             channel = msg.nick
         if not self.registryValue("enabled", msg.channel):
             return
-        genai.configure(api_key=self.registryValue("api_key", msg.channel))
+        api_key = self.registryValue("api_key", msg.channel)
+        client = self._get_client(api_key)
         prompt = self.registryValue("prompt", msg.channel).replace("$botnick", irc.nick)
         max_tokens = self.registryValue("max_tokens", msg.channel)
-        model = genai.GenerativeModel(
-            self.registryValue("model", msg.channel),
-            generation_config={"max_output_tokens": max_tokens},
-            system_instruction=prompt,
-        )
+        model_name = self.registryValue("model", msg.channel)
         max_history = self.registryValue("max_history", msg.channel)
-        self.history.setdefault(channel, None)
-        if not self.history[channel] or max_history < 1:
-            self.history[channel] = []
-        chat = model.start_chat(history=self.history[channel][-max_history:])
+        self.history.setdefault(channel, [])
+        history = list(self.history[channel][-max_history:]) if max_history >= 1 else []
+        config = types.GenerateContentConfig(
+            system_instruction=prompt,
+            max_output_tokens=max_tokens,
+        )
+        user_text = "%s: %s" % (msg.nick, text) if self.registryValue("nick_include", msg.channel) else text
         try:
-            if self.registryValue("nick_include", msg.channel):
-                response = chat.send_message("%s: %s" % (msg.nick, text))
-            else:
-                response = chat.send_message(text)
+            chat = client.chats.create(model=model_name, config=config, history=history)
+            response = chat.send_message(user_text)
         except Exception as e:
             log.error("Gemini failed to fetch response: %s", e)
             return
@@ -84,7 +89,9 @@ class Gemini(callbacks.Plugin):
         for line in content.splitlines():
             if line:
                 irc.reply(line, prefixNick=prefix)
-        self.history[channel] = chat.history
+        if max_history >= 1:
+            self.history[channel].append(types.Content(role='user', parts=[types.Part.from_text(text=user_text)]))
+            self.history[channel].append(response.candidates[0].content)
 
     chat = wrap(chat, ["text"])
 
